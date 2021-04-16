@@ -63,33 +63,62 @@ class TimelineItem:
         self.MediaItem = mediaItem
         self.TimelineStart = self.MediaItem.Position
         self.TimelineEnd = self.MediaItem.Position + self.MediaItem.Length
-        take = self.MediaItem.GetTakes()[0]
-        self.SourceStart = take.StartOffset
-        self.SourceEnd = take.StartOffset + (self.MediaItem.Length + take.Playrate)
+        self.Take = self.MediaItem.GetTakes()[0]
+        self.SourceStart = self.Take.StartOffset
+        self.SourceEnd = self.Take.StartOffset + (self.MediaItem.Length + self.Take.Playrate)
 
     def ToString(self):
         itemName = os.path.basename(self.MediaItem.GetTakes()[0].GetFilename())
         return "{}:\n\tTimeline start: {}\n\tTimeline end: {}\n\tSource start: {}\n\tSource end: {}".format(itemName, self.TimelineStart, self.TimelineEnd, self.SourceStart, self.SourceEnd)
 
-def GetSelectedTrack():
-    track = Track(RPR_GetSelectedTrack(0, 0))
-    return track
+class ReaperTrackExport:
+    EXPORT_FOLDER = "_tracks"
 
-def GetSelectedTracks():
-    return [track for track in GetTracks() if track.Selected]
+    def GetSelectedTrack():
+        track = Track(RPR_GetSelectedTrack(0, 0))
+        return track
 
-def GetTracks():
-    tracks = []
-    numTracks = RPR_GetNumTracks()
-    for i in range(numTracks):
-        track = Track(RPR_GetTrack(0, i))
-        tracks.append(track)
-    return tracks
+    def GetSelectedTracks():
+        return [track for track in ReaperTrackExport.GetTracks() if track.Selected]
 
-def GetTimelineItems(track):
-    #returns a list of all items on the given track
-    return [TimelineItem(mediaItem) for mediaItem in track.GetMediaItems()]
+    def GetTracks():
+        tracks = []
+        numTracks = RPR_GetNumTracks()
+        for i in range(numTracks):
+            track = Track(RPR_GetTrack(0, i))
+            tracks.append(track)
+        return tracks
+
+    def GetTimelineItems(track):
+        #returns a list of all items on the given track
+        return [TimelineItem(mediaItem) for mediaItem in track.GetMediaItems()]
+
+    def ExportTimelineItems(track, folder=None, selectionStart=None, selectionEnd=None):
+        #get all timeline items from track
+        timelineItems = ReaperTrackExport.GetTimelineItems(track)
+
+        if selectionStart is not None and selectionEnd is not None:
+            #filter to only items within the selected time
+            timelineItems = [ti for ti in timelineItems if ti.TimelineStart >= selectionStart and ti.TimelineEnd <= selectionEnd]
+
+        if folder is None:
+            #get folder based on project path
+            projectPath = RPR_GetProjectPath(' ' * 1024, 1024)[0]
+            folder = os.path.join(projectPath, ReaperTrackExport.EXPORT_FOLDER)
+            if not os.path.exists(folder):
+                os.mkdir(folder)
+
+        #write to csv
+        filepath = os.path.join(folder, track.Name + ".csv")
+        with open("{}".format(filepath), 'w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(["Source", "TimelineStart", "TimelineEnd", "SourceStart", "SourceEnd"])
+            for ti in timelineItems:
+                writer.writerow([ti.Take.GetFilename(), ti.TimelineStart, ti.TimelineEnd, ti.SourceStart, ti.SourceEnd])
 
 if __name__ == "__main__":
-    for selectedTrack in GetSelectedTracks():
-        RPR_ShowMessageBox("{}".format('\n\n'.join([ti.ToString() for ti in GetTimelineItems(selectedTrack)])), "Timeline Items", 0)
+    selectedTracks = ReaperTrackExport.GetSelectedTracks()
+    for selectedTrack in selectedTracks:
+        ReaperTrackExport.ExportTimelineItems(selectedTrack)
+    
+    RPR_ShowMessageBox("Exported {} tracks to '{}' folder.".format(len(selectedTracks), ReaperTrackExport.EXPORT_FOLDER), "Success", 0)
