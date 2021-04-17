@@ -6,30 +6,31 @@ class Track:
     NAME_BUF = "_" * 256
 
     def __init__(self, track):
-        self.Track = track
-        self.Name = RPR_GetTrackName(self.Track, "_" * 256, 256)[2]
-        self.Selected = RPR_GetMediaTrackInfo_Value(self.Track, "I_SELECTED") == 1
+        self.Data = track
+        self.Name = RPR_GetTrackName(self.Data, "_" * 256, 256)[2]
+        self.Selected = RPR_GetMediaTrackInfo_Value(self.Data, "I_SELECTED") == 1
 
     def GetMediaItems(self):
         mediaItems = []
-        numMediaItems = RPR_GetTrackNumMediaItems(self.Track)
+        numMediaItems = RPR_GetTrackNumMediaItems(self.Data)
         for i in range(numMediaItems):
-            mediaItems.append(MediaItem(self.Track, i))
+            mediaItems.append(MediaItem(self, i))
         return mediaItems
 
 class MediaItem:
     def __init__(self, track, index):
         self.Track = track
         self.Index = index
-        self.MediaItem = RPR_GetTrackMediaItem(self.Track, self.Index)
-        self.Position = RPR_GetMediaItemInfo_Value(self.MediaItem, "D_POSITION")
-        self.Length = RPR_GetMediaItemInfo_Value(self.MediaItem, "D_LENGTH")
+        self.Data = RPR_GetTrackMediaItem(self.Track.Data, self.Index)
+        self.Position = RPR_GetMediaItemInfo_Value(self.Data, "D_POSITION")
+        self.Length = RPR_GetMediaItemInfo_Value(self.Data, "D_LENGTH")
+        self.Take = self.GetTakes()[0]
 
     def GetTakes(self):
         takes = []
-        numTakes = RPR_GetMediaItemNumTakes(self.MediaItem)
+        numTakes = RPR_GetMediaItemNumTakes(self.Data)
         for i in range(numTakes):
-            takes.append(Take(self.MediaItem, i))
+            takes.append(Take(self, i))
         return takes
 
 class Take:
@@ -39,10 +40,17 @@ class Take:
     def __init__(self, mediaItem, index):
         self.MediaItem = mediaItem
         self.Index = index
-        self.Take = RPR_GetMediaItemTake(self.MediaItem, self.Index)
-        self.Source = RPR_GetMediaItemTake_Source(self.Take)
-        self.StartOffset = RPR_GetMediaItemTakeInfo_Value(self.Take, "D_STARTOFFS")
-        self.Playrate = RPR_GetMediaItemTakeInfo_Value(self.Take, "D_PLAYRATE")
+        self.Data = RPR_GetMediaItemTake(self.MediaItem.Data, self.Index)
+        self.Source = RPR_GetMediaItemTake_Source(self.Data)
+        self.Filename = self.GetFilename()
+        self.Name = self.GetName()
+        self.IsSection = False #placeholders...
+        self.SectionOffset = 0
+        self.SectionLength = 0
+        self.Reverse = False
+        self.GetSectionInfo() #section data is only valid if take is a section
+        self.StartOffset = self.SectionOffset + RPR_GetMediaItemTakeInfo_Value(self.Data, "D_STARTOFFS") + (self.SectionLength * (1 if self.Reverse else 0))
+        self.Playrate = RPR_GetMediaItemTakeInfo_Value(self.Data, "D_PLAYRATE")
 
     def GetMetadata(self):
         metadata = RPR_GetMediaFileMetadata(self.Source, "", Take.METADATA_BUF, len(Take.METADATA_BUF))
@@ -58,17 +66,30 @@ class Take:
             source = RPR_GetMediaSourceParent(source)
         return filename
 
+    def GetName(self):
+        return os.path.splitext(os.path.basename(self.Filename))[0]
+
+    def GetSectionInfo(self):
+        #if the take is a section of another source, need to get some additional info
+        sectionInfo = RPR_PCM_Source_GetSectionInfo(self.Source, self.SectionOffset, self.SectionLength, self.Reverse)
+        self.IsSection = True if sectionInfo[0] else False
+        if self.IsSection:
+            self.SectionOffset = sectionInfo[2]
+            self.SectionLength = sectionInfo[3]
+            self.Reverse = True if sectionInfo[4] else False
+            self.ReverseValue = -1 if self.Reverse else 1
+
 class TimelineItem:
     def __init__(self, mediaItem):
         self.MediaItem = mediaItem
         self.TimelineStart = self.MediaItem.Position
         self.TimelineEnd = self.MediaItem.Position + self.MediaItem.Length
-        self.Take = self.MediaItem.GetTakes()[0]
+        self.Take = self.MediaItem.Take
         self.SourceStart = self.Take.StartOffset
-        self.SourceEnd = self.Take.StartOffset + (self.MediaItem.Length + self.Take.Playrate)
+        self.SourceEnd = self.Take.StartOffset + ((self.MediaItem.Length * self.Take.Playrate) * (-1 if self.Take.Reverse else 1))
 
     def ToString(self):
-        itemName = os.path.basename(self.MediaItem.GetTakes()[0].GetFilename())
+        itemName = os.path.basename(self.MediaItem.Take.GetFilename())
         return "{}:\n\tTimeline start: {}\n\tTimeline end: {}\n\tSource start: {}\n\tSource end: {}".format(itemName, self.TimelineStart, self.TimelineEnd, self.SourceStart, self.SourceEnd)
 
 class ReaperTrackExport:
@@ -112,9 +133,9 @@ class ReaperTrackExport:
         filepath = os.path.join(folder, track.Name + ".csv")
         with open("{}".format(filepath), 'w', newline='') as csvfile:
             writer = csv.writer(csvfile)
-            writer.writerow(["Source", "TimelineStart", "TimelineEnd", "SourceStart", "SourceEnd"])
+            writer.writerow(["Name", "Source", "TimelineStart", "TimelineEnd", "SourceStart", "SourceEnd", "Playrate", "Reverse"])
             for ti in timelineItems:
-                writer.writerow([ti.Take.GetFilename(), ti.TimelineStart, ti.TimelineEnd, ti.SourceStart, ti.SourceEnd])
+                writer.writerow([ti.Take.GetName(), ti.Take.GetFilename(), ti.TimelineStart, ti.TimelineEnd, ti.SourceStart, ti.SourceEnd, ti.Take.Playrate, ti.Take.Reverse])
 
 if __name__ == "__main__":
     selectedTracks = ReaperTrackExport.GetSelectedTracks()
